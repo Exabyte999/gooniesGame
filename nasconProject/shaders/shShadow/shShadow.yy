@@ -1,0 +1,12 @@
+{
+  "$GMShader":"",
+  "%Name":"shShadow",
+  "name":"shShadow",
+  "parent":{
+    "name":"nasconProject",
+    "path":"nasconProject.yyp",
+  },
+  "resourceType":"GMShader",
+  "resourceVersion":"2.0",
+  "type":1,
+}
