@@ -54,3 +54,19 @@ draw_set_colour(_col);
 if (_blocks > 0) draw_rectangle(_bx, _by, _bx + round(_bw * _blocks / _total) - 1, _by + _bh, false);
 pixel_text(_bx + _bw / 2, _by + 3, _label, 2, c_white, fa_center);
 draw_set_colour(c_white);
+
+// Power-up, just above the build box: what you hold, and the seconds or swings left.
+if (pu_kind >= 0) {
+	var _pc = drop_cols(pu_kind);
+	var _uy = _y - 64;
+	draw_set_colour(c_black);
+	draw_rectangle(_x - 4, _uy - 4, _x + 284, _uy + 52, false);
+	draw_set_colour(_pc[1]);
+	draw_rectangle(_x, _uy, _x + 280, _uy + 48, false);
+	draw_set_colour(make_colour_rgb(26, 30, 52));
+	draw_rectangle(_x + 4, _uy + 4, _x + 276, _uy + 44, false);
+	draw_drop_orb(_x + 26, _uy + 24, pu_kind, 0.8, current_time / 8, 1);
+	var _txt = (pu_kind == DROP.SPEED) ? "SPEED  " + string(ceil(pu_left / 60)) + "S" : "TRIPLE WHIP  " + string(pu_left) + " LEFT";
+	pixel_text(_x + 54, _uy + 14, _txt, 2, _pc[0], fa_left);
+	draw_set_colour(c_white);
+}

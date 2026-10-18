@@ -75,8 +75,17 @@ chain_build = function(_t) {
 };
 
 // Grid position of a chain joint.
-chain_grid_x = function(_p) { return fx + lengthdir_x(_p[0], chain_ang_end) + lengthdir_x(_p[2], chain_ang_end + 90); };
-chain_grid_y = function(_p) { return fy + lengthdir_y(_p[0], chain_ang_end) + lengthdir_y(_p[2], chain_ang_end + 90); };
+// chain_off shifts the whole whip sideways, for the side whips of a triple whip.
+chain_grid_x = function(_p) { return fx + lengthdir_x(_p[0], chain_ang_end) + lengthdir_x(_p[2] + chain_off, chain_ang_end + 90); };
+chain_grid_y = function(_p) { return fy + lengthdir_y(_p[0], chain_ang_end) + lengthdir_y(_p[2] + chain_off, chain_ang_end + 90); };
+chain_off = 0;            // sideways shift in tiles of the whip being worked out (see chain_offsets)
+chain_triple = false;     // this lash is a triple whip (power-up)
+// Sideways shift of each whip in this lash: three side by side for a triple whip.
+chain_offsets = function() { return chain_triple ? [-TRIPLE_GAP, 0, TRIPLE_GAP] : [0]; };
+
+// Sky drop power-up (see Sky drops in scr_iso): one at a time, on top of your build.
+pu_kind = -1;             // DROP.SPEED or DROP.TRIPLE, -1 for none
+pu_left = 0;              // frames of speed left, or triple whip swings left
 
 // True if a square of size radius around (_x, _y) only touches walkable tiles.
 can_stand = function(_x, _y) {

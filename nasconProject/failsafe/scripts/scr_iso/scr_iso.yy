@@ -1,0 +1,13 @@
+{
+  "$GMScript":"v1",
+  "%Name":"scr_iso",
+  "isCompatibility":false,
+  "isDnD":false,
+  "name":"scr_iso",
+  "parent":{
+    "name":"nasconProject",
+    "path":"nasconProject.yyp",
+  },
+  "resourceType":"GMScript",
+  "resourceVersion":"2.0",
+}

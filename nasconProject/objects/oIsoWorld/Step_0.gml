@@ -48,6 +48,7 @@ if (!global.net_client_match) {
 	// TEMP: F1 drops a dummy on a random open inner tile (see iso_spawn_dummy).
 	if (keyboard_check_pressed(vk_f1)) iso_spawn_dummy();
 }
+drops_step();   // sky drops count up and their particles move (see Sky drops in scr_iso)
 
 // Burning tiles count down, cracking as they go, then crumble.
 for (var _gx = 0; _gx < global.iso_w; _gx++) {

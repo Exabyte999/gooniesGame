@@ -197,3 +197,8 @@ if (global.net_client_match) {
 hover_gx = -1;
 hover_gy = -1;
 had_focus = true;   // the window had focus last frame (see Step)
+drops_reset();      // no sky drops left over from the last match (see Sky drops in scr_iso)
+// The game's own cursor: a little cloud spirit with a gold star on its antenna (sCursor).
+// It aims with the middle of its face.
+cursor_sprite = sCursor;
+window_set_cursor(cr_none);

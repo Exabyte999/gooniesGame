@@ -60,3 +60,4 @@ if (rewind_flash > 0) {
 // Over you: the ability aura and, after a kill, your sparks.
 draw_ability_aura();
 draw_kill_sparks();
+draw_powerup_aura();   // holding a sky drop power-up

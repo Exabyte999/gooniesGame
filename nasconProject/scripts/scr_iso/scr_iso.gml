@@ -1095,6 +1095,7 @@ function match_reset() {
 	global.match_over = false;
 	global.match_winner = noone;
 	global.match_timer = 0;
+	drops_reset();
 }
 
 // Call when the match begins.
@@ -1144,6 +1145,7 @@ function match_step() {
 			game_event("go");
 		}
 	}
+	drops_host_step();   // sky drops (see Sky drops)
 	if (!global.match_over) {
 		if (global.match_players < 2) return;
 		var _alive = [];
@@ -1196,6 +1198,10 @@ function draw_match_end() {
 //   match_start  players, seed
 //   go
 //   match_won    winner (-1 if nobody)
+//   drop_spawn   n, kind, gx, gy   (see Sky drops)
+//   drop_land    n
+//   drop_grab    n, player, kind
+//   drop_gone    n
 #macro EVENT_LOG_MAX 512       // oldest events drop off after this many
 global.event_log = [];
 
@@ -1262,6 +1268,56 @@ function event_apply(_e) {
 			}
 			break;
 		}
+		case "drop_spawn":
+			array_push(global.drops, { n: _e.n, kind: _e.kind, gx: _e.gx, gy: _e.gy, t: 0, landed: false, age: 0 });
+			break;
+		case "drop_land": {
+			var _i = drop_find(_e.n);
+			if (_i < 0) break;
+			var _d = global.drops[_i];
+			var _sx = iso_to_screen_x(_d.gx, _d.gy), _sy = iso_to_screen_y(_d.gx, _d.gy);
+			if (_d.kind == DROP.FIREBALL) {
+				// Impact: a burst of embers, a shockwave and a shake. It's gone; the fire stays.
+				array_delete(global.drops, _i, 1);
+				drop_burst(_sx, _sy - 6, 34, DROP.FIREBALL, 4.5);
+				array_push(global.drop_rings, { px: _sx, py: _sy, t: 0 });
+				global.shake = max(global.shake, 5);
+				// A stone thud, and the start of the Fire whoosh faded out quickly. snd_fire is a
+				// 9 second burn, so left alone it piles up when fireballs come every few seconds.
+				sfx_play(snd_rock_hit, -8, 0.06, 0.6);
+				var _v = sfx_play(snd_fire, -10, 0.05, 0.7);
+				audio_sound_gain(_v, 0, 600);
+				array_push(global.drop_sounds, { v: _v, t: 40 });
+			} else {
+				_d.landed = true;
+				_d.age = 0;
+				drop_burst(_sx, _sy - 8, 12, _d.kind, 2);
+			}
+			break;
+		}
+		case "drop_grab": {
+			var _i = drop_find(_e.n);
+			if (_i >= 0) {
+				var _d = global.drops[_i];
+				drop_burst(iso_to_screen_x(_d.gx, _d.gy), iso_to_screen_y(_d.gx, _d.gy) - 14, 18, _d.kind, 2.5);
+				array_delete(global.drops, _i, 1);
+			}
+			var _who = iso_body_by_pid(_e.player);
+			if (instance_exists(_who) && _who.object_index == oIsoPlayer) {
+				_who.pu_kind = _e.kind;
+				_who.pu_left = (_e.kind == DROP.SPEED) ? PU_SPEED_FRAMES : PU_TRIPLE_SWINGS;
+				if (_who.is_local) sfx_play(snd_time, -12, 0.03, 1.4);   // only the one who took it hears it
+			}
+			break;
+		}
+		case "drop_gone": {
+			var _i = drop_find(_e.n);
+			if (_i < 0) break;
+			var _d = global.drops[_i];
+			drop_burst(iso_to_screen_x(_d.gx, _d.gy), iso_to_screen_y(_d.gx, _d.gy) - 14, 8, _d.kind, 1.5);
+			array_delete(global.drops, _i, 1);
+			break;
+		}
 		case "tile_ignite":
 			if (iso_has_floor(_e.gx, _e.gy)) global.iso_burn[_e.gx][_e.gy] = ISO_BURN_FRAMES;
 			break;
@@ -1277,6 +1333,7 @@ function event_apply(_e) {
 				if (lives_left == 0) eliminated = true;
 				last_hit_by = noone;
 				last_hit_timer = 0;
+				if (variable_instance_exists(id, "pu_kind")) { pu_kind = -1; pu_left = 0; }   // a power-up goes with the life
 			}
 			kill_feed_add(iso_body_by_pid(_e.by), _who, _who.eliminated);
 			// The killer shimmers with their build's sparks for a few seconds.
@@ -1940,6 +1997,7 @@ function net_steam_async() {
 			}
 			break;
 
+//made by azlaan[exabyte909], mohib, and umer 
 		case "lobby_list":
 			if (!listing) break;
 			listing = false;
@@ -1997,6 +2055,7 @@ function net_body_state() {
 		_s.sh = shadow_timer;
 		_s.cs = chain_state; _s.ct = chain_t; _s.ca = chain_ang_end; _s.cl = chain_len_max;
 		_s.cc = chain_scale; _s.cd = chain_side; _s.cu = chain_cut;
+		_s.pk = pu_kind; _s.pl = pu_left; _s.c3 = chain_triple;
 		_s.ht = heat; _s.fi = fire_timer; _s.ad = ability_cd; _s.am = ability_cd_max; _s.rf = rewind_flash;
 		var _rt = (build == BUILD.TIME) ? rewind_target() : undefined;
 		if (!is_undefined(_rt)) { _s.hx = _rt[0]; _s.hy = _rt[1]; }
@@ -2118,6 +2177,7 @@ function body_puppet_apply(_b) {
 
 	if (object_index != oIsoPlayer) return;
 	build = _b.b;
+	if (variable_struct_exists(_b, "pk")) { pu_kind = _b.pk; pu_left = _b.pl; chain_triple = _b.c3; }
 	shadow_timer = _b.sh;
 	is_shadow = shadow_timer > 0;
 	heat = _b.ht;
@@ -2142,15 +2202,20 @@ function body_puppet_apply(_b) {
 		if (_was == 1 && chain_state == 2 && chain_cut == chain_segs && array_length(chain_pts) > chain_segs) {
 			audio_whip_tile();
 			var _tip = chain_pts[chain_segs];
-			var _tx = iso_to_screen_x(chain_grid_x(_tip), chain_grid_y(_tip));
-			var _ty = iso_to_screen_y(chain_grid_x(_tip), chain_grid_y(_tip));
-			repeat (10) {
-				array_push(sparks, {
-					px: _tx, py: _ty - 4,
-					vx: random_range(-2.5, 2.5), vy: random_range(-3, 0.5),
-					life: irandom_range(8, 16),
-				});
+			var _offs = chain_offsets();   // each tip of a triple whip
+			for (var _o = 0; _o < array_length(_offs); _o++) {
+				chain_off = _offs[_o];
+				var _tx = iso_to_screen_x(chain_grid_x(_tip), chain_grid_y(_tip));
+				var _ty = iso_to_screen_y(chain_grid_x(_tip), chain_grid_y(_tip));
+				repeat (10) {
+					array_push(sparks, {
+						px: _tx, py: _ty - 4,
+						vx: random_range(-2.5, 2.5), vy: random_range(-3, 0.5),
+						life: irandom_range(8, 16),
+					});
+				}
 			}
+			chain_off = 0;
 		}
 	}
 }
@@ -2407,6 +2472,312 @@ function draw_kill_sparks() {
 		var _s = kill_fx[_i];
 		draw_sprite_ext(sKillSparks, _b * 6 + (_s.t div FX_FRAME) mod 6, round(x + _s.ox), round(y + _s.oy), 1, 1, 0, c_white, 0.25 * fx_alpha(_s.t, FX_SPARK_FRAMES));
 	}
+}
+
+// ---------- Sky drops: fireballs and power-ups ----------
+// Every DROP_EVERY frames of a match the host drops something on a random standing tile.
+// It hovers high above it, spinning, for 3 seconds while that tile flashes in its colour
+// (red for a fireball, blue for speed, gold for triple whip), then falls. A fireball sets the tile alight, so it
+// crumbles like a Fire whip's, and pushes anyone close a little. A power-up sits on the
+// tile until a player walks over it, or fades after DROP_LIFE. You can hold one power-up
+// at a time, and it stacks with your build. Spawns, landings and pickups are events, so
+// LAN and Steam players see the same drops; their games just animate them.
+#macro DROP_EVERY 900          // power-ups: 15 seconds apart at the start of a match
+#macro DROP_EVERY_MIN 360      // down to 6 seconds
+#macro DROP_RAMP 7200          // over the first 2 minutes after GO, then it stays there
+#macro DROP_HOVER 180          // 3 seconds hovering and spinning
+#macro DROP_FALL 16            // frames to fall
+#macro DROP_HEIGHT 200         // pixels above the tile it hovers
+#macro DROP_LIFE 600           // a power-up nobody takes fades after 10 seconds
+#macro FIREBALL_RADIUS 1.5     // tiles: bodies this close to the impact get pushed
+#macro FIREBALL_FORCE 0.2      // the push right at the impact (a whip is 0.345), half that at the edge
+#macro PU_SPEED_FRAMES 180     // speed boost: 3 seconds
+#macro PU_SPEED_MULT 1.5
+#macro PU_TRIPLE_SWINGS 3      // triple whip: three lashes, then it's gone
+#macro TRIPLE_GAP 0.8          // tiles between the three whips of a triple whip
+#macro TRIPLE_KNOCK 1.25        // a triple whip knocks 25% harder
+enum DROP { FIREBALL, SPEED, TRIPLE }
+global.drops = [];             // { n, kind, gx, gy, t, landed, age }
+global.drop_parts = [];        // pixel particles { px, py, vx, vy, life, col }
+global.drop_rings = [];        // fireball shockwaves { px, py, t }
+global.drop_sounds = [];       // fireball whooshes to stop once faded { v, t }
+global.drop_timer = 0;         // power-ups
+global.drop_fire_timer = 0;    // fireballs, on their own timer
+global.drop_clock = 0;         // frames since GO, for the ramp
+global.drop_next = 0;          // the host numbers drops so events can name them
+
+function drops_reset() {
+	global.drops = [];
+	global.drop_parts = [];
+	global.drop_rings = [];
+	for (var _i = 0; _i < array_length(global.drop_sounds); _i++) audio_stop_sound(global.drop_sounds[_i].v);
+	global.drop_sounds = [];
+	global.drop_timer = 0;
+	global.drop_fire_timer = 0;
+	global.drop_clock = 0;
+	global.drop_next = 0;
+}
+
+// Index of drop number _n in global.drops, or -1.
+function drop_find(_n) {
+	for (var _i = 0; _i < array_length(global.drops); _i++) if (global.drops[_i].n == _n) return _i;
+	return -1;
+}
+
+// Each kind's colours: [core, glow].
+function drop_cols(_kind) {
+	switch (_kind) {
+		case DROP.FIREBALL: return [make_colour_rgb(255, 150, 40), make_colour_rgb(255, 60, 20)];
+		case DROP.SPEED:    return [make_colour_rgb(140, 235, 255), make_colour_rgb(50, 150, 255)];
+		default:            return [make_colour_rgb(255, 225, 120), make_colour_rgb(240, 160, 30)];
+	}
+}
+
+// How high a drop's orb is above its tile, in pixels.
+function drop_height(_d) {
+	if (_d.landed) return 0;
+	if (_d.t < DROP_HOVER) return DROP_HEIGHT + sin(_d.t / 12) * 6;
+	var _k = min(1, (_d.t - DROP_HOVER) / DROP_FALL);
+	return DROP_HEIGHT * (1 - _k * _k);
+}
+
+// A puff of _n pixels at screen (_x, _y) in a kind's colours.
+function drop_burst(_x, _y, _n, _kind, _speed) {
+	var _c = drop_cols(_kind);
+	repeat (_n) {
+		var _a = random(360), _s = random_range(0.5, _speed);
+		array_push(global.drop_parts, { px: _x, py: _y, vx: lengthdir_x(_s, _a), vy: lengthdir_y(_s, _a) * 0.6 - 0.8, life: irandom_range(14, 30), col: choose(_c[0], _c[1], c_white) });
+	}
+}
+
+// Frames between fireballs, _t frames after GO: 15 s at GO, 4 s at 1 minute, 3 s at
+// 1.5 minutes and 2 s from 2 minutes on, in straight lines between those.
+function fireball_every(_t) {
+	var _pts = [[0, 900], [3600, 240], [5400, 180], [7200, 120]];
+	for (var _i = 1; _i < array_length(_pts); _i++) {
+		var _a = _pts[_i - 1], _b = _pts[_i];
+		if (_t <= _b[0]) return round(lerp(_a[1], _b[1], (_t - _a[0]) / (_b[0] - _a[0])));
+	}
+	return 120;
+}
+
+// Host: drop a _kind on a random standing tile that isn't burning and has nothing else coming.
+function drop_spawn(_kind) {
+	var _spots = [];
+	for (var _gx = 0; _gx < global.iso_w; _gx++) {
+		for (var _gy = 0; _gy < global.iso_h; _gy++) {
+			if (!iso_walkable(_gx, _gy) || global.iso_burn[_gx][_gy] > 0) continue;
+			var _taken = false;
+			for (var _i = 0; _i < array_length(global.drops); _i++) if (global.drops[_i].gx == _gx && global.drops[_i].gy == _gy) _taken = true;
+			if (!_taken) array_push(_spots, [_gx, _gy]);
+		}
+	}
+	if (array_length(_spots) == 0) return;
+	var _s = _spots[irandom(array_length(_spots) - 1)];
+	game_event("drop_spawn", { n: global.drop_next, kind: _kind, gx: _s[0], gy: _s[1] });
+	global.drop_next++;
+}
+
+// Host only, from match_step: the drop timers, landings, pickups and fading.
+function drops_host_step() {
+	if (match_locked() || global.match_over) return;
+	global.drop_clock++;
+	// Power-ups: 15 s apart at GO, steadily more often until 6 s apart from 2 minutes in.
+	global.drop_timer++;
+	if (global.drop_timer >= round(lerp(DROP_EVERY, DROP_EVERY_MIN, min(1, global.drop_clock / DROP_RAMP)))) {
+		global.drop_timer = 0;
+		drop_spawn(choose(DROP.SPEED, DROP.TRIPLE));
+	}
+	// Fireballs, on their own timer (see fireball_every).
+	global.drop_fire_timer++;
+	if (global.drop_fire_timer >= fireball_every(global.drop_clock)) {
+		global.drop_fire_timer = 0;
+		drop_spawn(DROP.FIREBALL);
+	}
+	for (var _i = array_length(global.drops) - 1; _i >= 0; _i--) {
+		var _d = global.drops[_i];
+		if (!_d.landed) {
+			if (_d.t < DROP_HOVER + DROP_FALL) continue;
+			game_event("drop_land", { n: _d.n });
+			if (_d.kind == DROP.FIREBALL) {
+				// The tile burns and crumbles like the Fire whip's, and anyone close is pushed away.
+				iso_ignite_tile(_d.gx, _d.gy);
+				var _all = iso_bodies();
+				for (var _b = 0; _b < array_length(_all); _b++) {
+					var _who = _all[_b];
+					if (_who.eliminated || _who.falling) continue;
+					var _dist = point_distance(_who.fx, _who.fy, _d.gx, _d.gy);
+					if (_dist > FIREBALL_RADIUS) continue;
+					var _force = FIREBALL_FORCE * (1 - 0.5 * _dist / FIREBALL_RADIUS);
+					with (_who) body_knock(_d.gx, _d.gy, _force);
+				}
+			}
+			continue;
+		}
+		// A power-up on the ground: gone if its tile is, or after DROP_LIFE.
+		if (!iso_has_floor(_d.gx, _d.gy) || _d.age >= DROP_LIFE) {
+			game_event("drop_gone", { n: _d.n });
+			continue;
+		}
+		// The first player to walk over it who isn't already holding one takes it.
+		with (oIsoPlayer) {
+			if (eliminated || falling || pu_kind >= 0) continue;
+			if (point_distance(fx, fy, _d.gx, _d.gy) > 0.6) continue;
+			game_event("drop_grab", { n: _d.n, player: player_id, kind: _d.kind });
+			break;
+		}
+	}
+}
+
+// Every game, every frame of a match: drops count up, and their particles move.
+function drops_step() {
+	for (var _i = 0; _i < array_length(global.drops); _i++) {
+		var _d = global.drops[_i];
+		var _sx = iso_to_screen_x(_d.gx, _d.gy), _sy = iso_to_screen_y(_d.gx, _d.gy);
+		if (_d.landed) {
+			_d.age++;
+			if (random(1) < 0.15) drop_burst(_sx + random_range(-8, 8), _sy - 16, 1, _d.kind, 0.6);
+			continue;
+		}
+		_d.t++;
+		// Embers off a fireball, sparkles off a power-up.
+		var _oy = _sy - 14 - drop_height(_d);
+		if (random(1) < ((_d.kind == DROP.FIREBALL) ? 0.8 : 0.35)) {
+			var _c = drop_cols(_d.kind);
+			array_push(global.drop_parts, { px: _sx + random_range(-7, 7), py: _oy + random_range(-7, 7), vx: random_range(-0.4, 0.4), vy: random_range(-0.9, -0.2), life: irandom_range(12, 24), col: choose(_c[0], _c[1]) });
+		}
+	}
+	for (var _i = array_length(global.drop_parts) - 1; _i >= 0; _i--) {
+		var _p = global.drop_parts[_i];
+		_p.px += _p.vx;
+		_p.py += _p.vy;
+		_p.vx *= 0.92;
+		_p.vy = _p.vy * 0.92 + 0.03;
+		_p.life--;
+		if (_p.life <= 0) array_delete(global.drop_parts, _i, 1);
+	}
+	for (var _i = array_length(global.drop_sounds) - 1; _i >= 0; _i--) {
+		var _fs = global.drop_sounds[_i];
+		_fs.t--;
+		if (_fs.t > 0) continue;
+		audio_stop_sound(global.drop_sounds[_i].v);
+		array_delete(global.drop_sounds, _i, 1);
+	}
+	for (var _i = array_length(global.drop_rings) - 1; _i >= 0; _i--) {
+		global.drop_rings[_i].t++;
+		if (global.drop_rings[_i].t >= 24) array_delete(global.drop_rings, _i, 1);
+	}
+}
+
+// A quad turned _ang degrees, filled with _col.
+function draw_spin_quad(_x, _y, _r, _ang, _col) {
+	draw_set_colour(_col);
+	draw_primitive_begin(pr_trianglefan);
+	for (var _k = 0; _k < 4; _k++) draw_vertex(_x + lengthdir_x(_r, _ang + _k * 90), _y + lengthdir_y(_r, _ang + _k * 90));
+	draw_primitive_end();
+}
+
+// One drop's orb at screen (_x, _y): a glow, a spinning gem, and a mark for power-ups.
+function draw_drop_orb(_x, _y, _kind, _sc, _ang, _alpha) {
+	var _c = drop_cols(_kind);
+	gpu_set_blendmode(bm_add);
+	draw_set_alpha(0.55 * _alpha);
+	draw_circle_colour(_x, _y, 20 * _sc, _c[1], c_black, false);
+	draw_set_alpha(1);
+	gpu_set_blendmode(bm_normal);
+	draw_set_alpha(_alpha);
+	draw_spin_quad(_x, _y, 12 * _sc, _ang, c_black);
+	draw_spin_quad(_x, _y, 10 * _sc, _ang, _c[1]);
+	draw_spin_quad(_x, _y, 6 * _sc, -_ang * 1.5, _c[0]);
+	if (_kind == DROP.FIREBALL) {
+		draw_set_colour(make_colour_rgb(255, 240, 180));
+		draw_circle(_x + random_range(-1, 1), _y + random_range(-1, 1), 2 * _sc, false);
+	} else if (_kind == DROP.SPEED) {
+		pixel_text(_x + 1, _y - 7 * _sc, ">", max(1, round(2 * _sc)), c_white, fa_center);
+	} else {
+		// Triple whip: three little whips side by side, each with a dark outline and a tip.
+		for (var _k = -1; _k <= 1; _k++) {
+			var _wx = _x + _k * 5 * _sc;
+			draw_set_colour(c_black);
+			draw_line_width(_wx - 2.5 * _sc, _y + 6 * _sc, _wx + 2.5 * _sc, _y - 6 * _sc, 3 * _sc);
+			draw_set_colour(c_white);
+			draw_line_width(_wx - 2 * _sc, _y + 5 * _sc, _wx + 2 * _sc, _y - 5 * _sc, 1.5 * _sc);
+			draw_circle(_wx + 2.5 * _sc, _y - 6 * _sc, 1.5 * _sc, false);
+		}
+	}
+	draw_set_alpha(1);
+	draw_set_colour(c_white);
+}
+
+// oIsoWorld Draw End: each drop's landing glow, shadow and orb, then the particles.
+function draw_drops() {
+	for (var _i = 0; _i < array_length(global.drops); _i++) {
+		var _d = global.drops[_i];
+		var _sx = iso_to_screen_x(_d.gx, _d.gy), _sy = iso_to_screen_y(_d.gx, _d.gy);
+		var _tile = global.iso_floor[_d.gx][_d.gy];
+		var _h = drop_height(_d);
+		// The tile it will land on pulses, faster as it gets close.
+		if (!_d.landed && _tile != -1) {
+			var _k = min(1, _d.t / (DROP_HOVER + DROP_FALL));
+			var _pulse = 0.5 + 0.5 * sin(_d.t * (0.08 + 0.3 * _k));
+			// Strongly coloured in the drop's own colour: a tinted layer, then an added glow on top.
+			var _gcs = drop_cols(_d.kind);
+			var _gc = _gcs[1];
+			var _str = (0.3 + 0.7 * _pulse) * (0.5 + 0.5 * _k);
+			draw_sprite_ext(sIsoTile, _tile, _sx, _sy, 1, 1, 0, _gc, 0.55 * _str);
+			gpu_set_blendmode(bm_add);
+			draw_sprite_ext(sIsoTile, _tile, _sx, _sy, 1, 1, 0, _gc, 0.8 * _str);
+			gpu_set_blendmode(bm_normal);
+		}
+		// Its shadow grows as it comes down.
+		var _near = 1 - _h / DROP_HEIGHT;
+		draw_set_alpha(0.12 + 0.25 * _near);
+		draw_set_colour(c_black);
+		draw_ellipse(_sx - 6 - 8 * _near, _sy - 3 - 3 * _near, _sx + 6 + 8 * _near, _sy + 3 + 3 * _near, false);
+		draw_set_alpha(1);
+		// A power-up on the ground bobs and turns slowly, and blinks out over its last second.
+		var _a = 1, _oy = _sy - 14 - _h, _ang = _d.t * 6;
+		if (_d.landed) {
+			_oy += sin(_d.age / 10) * 2;
+			_ang = _d.age * 2;
+			if (_d.age > DROP_LIFE - 60) _a = ((_d.age div 4) mod 2 == 0) ? (DROP_LIFE - _d.age) / 60 : 0.2;
+		}
+		draw_drop_orb(_sx, _oy, _d.kind, 1, _ang, _a);
+	}
+	for (var _i = 0; _i < array_length(global.drop_rings); _i++) {
+		var _r = global.drop_rings[_i];
+		var _k = _r.t / 24;
+		draw_set_alpha(1 - _k);
+		draw_set_colour(make_colour_rgb(255, 140, 40));
+		draw_ellipse(_r.px - 10 - 70 * _k, _r.py - 5 - 35 * _k, _r.px + 10 + 70 * _k, _r.py + 5 + 35 * _k, true);
+	}
+	for (var _i = 0; _i < array_length(global.drop_parts); _i++) {
+		var _p = global.drop_parts[_i];
+		draw_set_alpha(min(1, _p.life / 8));
+		draw_set_colour(_p.col);
+		draw_rectangle(_p.px - 1, _p.py - 1, _p.px + 1, _p.py + 1, false);
+	}
+	draw_set_alpha(1);
+	draw_set_colour(c_white);
+}
+
+// A faint glow at the feet and rising pixels while a player holds a power-up (run as the player).
+function draw_powerup_aura() {
+	if (pu_kind < 0 || falling) return;
+	var _c = drop_cols(pu_kind);
+	gpu_set_blendmode(bm_add);
+	draw_set_alpha(0.3 + 0.15 * sin(current_time / 150));
+	draw_ellipse_colour(x - 20, y - 8, x + 20, y + 8, _c[1], c_black, false);
+	draw_set_alpha(1);
+	gpu_set_blendmode(bm_normal);
+	draw_set_colour(_c[0]);
+	for (var _i = 0; _i < 4; _i++) {
+		var _rise = (current_time / 20 + _i * 17) mod 44;
+		draw_set_alpha(0.7 * (1 - _rise / 44));
+		draw_rectangle(x - 11 + _i * 7, y - 4 - _rise, x - 10 + _i * 7, y - 3 - _rise, false);
+	}
+	draw_set_alpha(1);
+	draw_set_colour(c_white);
 }
 
 // ---------- Clouds ----------

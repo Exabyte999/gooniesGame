@@ -187,6 +187,7 @@
     {"id":{"name":"sAbilityCircle","path":"sprites/sAbilityCircle/sAbilityCircle.yy",},},
     {"id":{"name":"sAbilityIcon","path":"sprites/sAbilityIcon/sAbilityIcon.yy",},},
     {"id":{"name":"sCloud","path":"sprites/sCloud/sCloud.yy",},},
+    {"id":{"name":"sCursor","path":"sprites/sCursor/sCursor.yy",},},
     {"id":{"name":"sIsoBlock","path":"sprites/sIsoBlock/sIsoBlock.yy",},},
     {"id":{"name":"sIsoBoulder","path":"sprites/sIsoBoulder/sIsoBoulder.yy",},},
     {"id":{"name":"sIsoBoulderCrack","path":"sprites/sIsoBoulderCrack/sIsoBoulderCrack.yy",},},

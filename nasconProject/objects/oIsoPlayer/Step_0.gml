@@ -21,6 +21,11 @@ if (global.pause_open && is_local) ability_lock = 10;   // your pause menu is up
 if (ability_lock > 0) ability_lock--;
 if (rewind_flash > 0) rewind_flash--;
 if (ability_cd > 0) ability_cd--;
+// Speed boost power-up: runs out after PU_SPEED_FRAMES.
+if (pu_kind == DROP.SPEED) {
+	pu_left--;
+	if (pu_left <= 0) { pu_kind = -1; pu_left = 0; }
+}
 
 // ---------- Abilities ----------
 var _space = input.ability && ability_lock == 0;
@@ -83,7 +88,7 @@ var _dgy = 0;
 if (_ix != 0 || _iy != 0) {
 	// Screen-space velocity in pixels, then into grid units.
 	var _len = point_distance(0, 0, _ix, _iy);
-	var _spd = move_speed * (is_shadow ? shadow_speed : 1) * (knock_timer > 0 ? 0.35 : 1);
+	var _spd = move_speed * (is_shadow ? shadow_speed : 1) * (knock_timer > 0 ? 0.35 : 1) * ((pu_kind == DROP.SPEED) ? PU_SPEED_MULT : 1);
 	var _vx = _ix / _len * _spd;
 	var _vy = _iy / _len * _spd;
 	_dgx = (_vx / ISO_HALF_W + _vy / ISO_HALF_H) / 2;
@@ -139,6 +144,12 @@ if (chain_state == 0 && chain_cooldown == 0 && ability_lock == 0 && input.whip) 
 	chain_cut = chain_segs;
 	chain_hits = [];
 	chain_cooldown = chain_cooldown_max;
+	// Triple whip power-up: this lash is three whips side by side, and uses up one of its swings.
+	chain_triple = (pu_kind == DROP.TRIPLE);
+	if (chain_triple) {
+		pu_left--;
+		if (pu_left <= 0) { pu_kind = -1; pu_left = 0; }
+	}
 	// Stretch the links so the tip lands exactly at the reach.
 	chain_scale = 1;
 	chain_build(1);
@@ -160,69 +171,81 @@ if (chain_state == 1) {
 	var _bodies = iso_bodies();
 	var _force = knock_force + ((build == BUILD.FIRE) ? heat / 100 * knock_heat_bonus : 0);
 
-	// Whatever the chain slaps down on gets hit.
-	for (var _i = 1; _i <= chain_segs; _i++) {
-		var _p = chain_pts[_i];
-		if (_p[3] < 0.85 || _p[0] < 0.4) continue;   // still in the air, or at your feet
-		var _lx = chain_grid_x(_p), _ly = chain_grid_y(_p);
-		for (var _b = 0; _b < array_length(_bodies); _b++) {
-			var _who = _bodies[_b];
-			if (_who == id || _who.falling || _who.is_shadow || array_contains(chain_hits, _who)) continue;
-			if (point_distance(_lx, _ly, _who.fx, _who.fy) > chain_hit_radius) continue;
-			array_push(chain_hits, _who);
-			// The tip hits harder: base force near the hand, rising to chain_tip_bonus x at the very tip.
-			var _tipk = 1 + (chain_tip_bonus - 1) * sqr(_i / chain_segs);
-			with (_who) body_knock(other.fx, other.fy, _force * _tipk, other.id);
-			global.shake = max(global.shake, 4);
-			repeat (8) {
-				array_push(sparks, {
-					px: iso_to_screen_x(_who.fx, _who.fy), py: iso_to_screen_y(_who.fx, _who.fy) - 24,
-					vx: random_range(-3, 3), vy: random_range(-3, 1), life: irandom_range(8, 14),
-					col: make_colour_rgb(255, 120, 120),
-				});
+	// Whatever the chain slaps down on gets hit. A triple whip does this for each of its three
+	// whips; chain_hits is shared, so nobody and nothing is hit twice in one lash.
+	var _offs = chain_offsets();
+	for (var _o = 0; _o < array_length(_offs) && chain_state == 1; _o++) {
+		chain_off = _offs[_o];
+		for (var _i = 1; _i <= chain_segs; _i++) {
+			var _p = chain_pts[_i];
+			if (_p[3] < 0.85 || _p[0] < 0.4) continue;   // still in the air, or at your feet
+			var _lx = chain_grid_x(_p), _ly = chain_grid_y(_p);
+			for (var _b = 0; _b < array_length(_bodies); _b++) {
+				var _who = _bodies[_b];
+				if (_who == id || _who.falling || _who.is_shadow || array_contains(chain_hits, _who)) continue;
+				if (point_distance(_lx, _ly, _who.fx, _who.fy) > chain_hit_radius) continue;
+				array_push(chain_hits, _who);
+				// The tip hits harder: base force near the hand, rising to chain_tip_bonus x at the very tip.
+				var _tipk = 1 + (chain_tip_bonus - 1) * sqr(_i / chain_segs);
+				if (chain_triple) _tipk *= TRIPLE_KNOCK;   // triple whip power-up: 25% more knockback
+				with (_who) body_knock(other.fx, other.fy, _force * _tipk, other.id);
+				global.shake = max(global.shake, 4);
+				repeat (8) {
+					array_push(sparks, {
+						px: iso_to_screen_x(_who.fx, _who.fy), py: iso_to_screen_y(_who.fx, _who.fy) - 24,
+						vx: random_range(-3, 3), vy: random_range(-3, 1), life: irandom_range(8, 14),
+						col: make_colour_rgb(255, 120, 120),
+					});
+				}
 			}
+			var _gx = floor(chain_grid_x(_p) + 0.5);
+			var _gy = floor(chain_grid_y(_p) + 0.5);
+			if (!iso_in_bounds(_gx, _gy) || (_gx == gx && _gy == gy)) continue;
+			var _prop = global.iso_prop[_gx][_gy];
+			if (!instance_exists(_prop) || _prop.broken) continue;
+			var _new = !array_contains(chain_hits, _prop);
+			if (_new) {
+				array_push(chain_hits, _prop);
+				game_event("prop_hit", { gx: _gx, gy: _gy, dmg: _dmg, side: chain_side, by: player_id });
+			}
+			if (_prop.is_boulder) {
+				// Boulders stop the whip dead: cut it here and reel it back.
+				chain_cut = _i;
+				if (build == BUILD.FIRE && heat >= heat_glow) iso_ignite_tile(_gx, _gy, player_id);
+				global.shake = max(global.shake, 3);
+				chain_state = 2;
+				chain_t = 0;
+				break;
+			}
+			if (_new) chain_slow = 4;
 		}
-		var _gx = floor(chain_grid_x(_p) + 0.5);
-		var _gy = floor(chain_grid_y(_p) + 0.5);
-		if (!iso_in_bounds(_gx, _gy) || (_gx == gx && _gy == gy)) continue;
-		var _prop = global.iso_prop[_gx][_gy];
-		if (!instance_exists(_prop) || _prop.broken) continue;
-		var _new = !array_contains(chain_hits, _prop);
-		if (_new) {
-			array_push(chain_hits, _prop);
-			game_event("prop_hit", { gx: _gx, gy: _gy, dmg: _dmg, side: chain_side, by: player_id });
-		}
-		if (_prop.is_boulder) {
-			// Boulders stop the whip dead: cut it here and reel it back.
-			chain_cut = _i;
-			if (build == BUILD.FIRE && heat >= heat_glow) iso_ignite_tile(_gx, _gy, player_id);
-			global.shake = max(global.shake, 3);
-			chain_state = 2;
-			chain_t = 0;
-			break;
-		}
-		if (_new) chain_slow = 4;
 	}
+	chain_off = 0;
 
 	if (chain_state == 1 && chain_t >= 1) {
-		// The tip cracks.
+		// The tip cracks (each tip, for a triple whip).
 		var _tip = chain_pts[chain_segs];
-		var _tx = iso_to_screen_x(chain_grid_x(_tip), chain_grid_y(_tip));
-		var _ty = iso_to_screen_y(chain_grid_x(_tip), chain_grid_y(_tip));
-		repeat (10) {
-			array_push(sparks, {
-				px: _tx, py: _ty - 4,
-				vx: random_range(-2.5, 2.5), vy: random_range(-3, 0.5),
-				life: irandom_range(8, 16),
-			});
+		var _toffs = chain_offsets();
+		for (var _o = 0; _o < array_length(_toffs); _o++) {
+			chain_off = _toffs[_o];
+			var _tx = iso_to_screen_x(chain_grid_x(_tip), chain_grid_y(_tip));
+			var _ty = iso_to_screen_y(chain_grid_x(_tip), chain_grid_y(_tip));
+			repeat (10) {
+				array_push(sparks, {
+					px: _tx, py: _ty - 4,
+					vx: random_range(-2.5, 2.5), vy: random_range(-3, 0.5),
+					life: irandom_range(8, 16),
+				});
+			}
+			// Fire: a glowing chain sets the tile it cracks on alight.
+			if (build == BUILD.FIRE && heat >= heat_glow) {
+				var _tgx = floor(chain_grid_x(_tip) + 0.5), _tgy = floor(chain_grid_y(_tip) + 0.5);
+				if (_tgx != gx || _tgy != gy) iso_ignite_tile(_tgx, _tgy, player_id);
+			}
 		}
+		chain_off = 0;
 		global.shake = max(global.shake, 1.5);
 		audio_whip_tile();   // on your own game only
-		// Fire: a glowing chain sets the tile it cracks on alight.
-		if (build == BUILD.FIRE && heat >= heat_glow) {
-			var _tgx = floor(chain_grid_x(_tip) + 0.5), _tgy = floor(chain_grid_y(_tip) + 0.5);
-			if (_tgx != gx || _tgy != gy) iso_ignite_tile(_tgx, _tgy, player_id);
-		}
 		chain_state = 2;
 		chain_t = 0;
 	}

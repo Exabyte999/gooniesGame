@@ -23,11 +23,15 @@ var _lite_a = merge_colour(make_colour_rgb(160, 160, 176), make_colour_rgb(255, 
 var _lite_b = merge_colour(make_colour_rgb(112, 112, 128), make_colour_rgb(240, 110, 30), _hot);
 var _glow = (build == BUILD.FIRE && heat >= heat_glow);
 
-if (chain_state != 0 && array_length(chain_pts) > chain_segs) {
+// A triple whip draws three, side by side, each from its own spot beside your hand.
+var _offs = (chain_state != 0) ? chain_offsets() : [];
+for (var _o = 0; _o < array_length(_offs) && array_length(chain_pts) > chain_segs; _o++) {
+	chain_off = _offs[_o];
 	// Reeling back slides the chain in towards the hand.
 	var _k = (chain_state == 2) ? 1 - chain_t * chain_t : 1;
-	var _px = x + 6 * facing;
-	var _py = y - 26;
+	var _hx = fx + lengthdir_x(chain_off, chain_ang_end + 90), _hy = fy + lengthdir_y(chain_off, chain_ang_end + 90);
+	var _px = x + 6 * facing + iso_to_screen_x(_hx, _hy) - iso_to_screen_x(fx, fy);
+	var _py = y - 26 + iso_to_screen_y(_hx, _hy) - iso_to_screen_y(fx, fy);
 	for (var _i = 1; _i <= chain_cut; _i++) {
 		var _p = chain_pts[_i];
 		var _q = [_p[0] * _k, _p[1] * _k, _p[2] * _k];
@@ -55,6 +59,7 @@ if (chain_state != 0 && array_length(chain_pts) > chain_segs) {
 	draw_set_colour(_lite_a);
 	draw_circle(_px - 1, _py - 1, 1, false);
 }
+chain_off = 0;
 
 // A hot chain smoulders in your hand even when you're not whipping.
 if (_glow && !falling && random(1) < 0.3) {
